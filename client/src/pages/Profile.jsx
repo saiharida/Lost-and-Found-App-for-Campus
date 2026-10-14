@@ -5,6 +5,18 @@ import { useAuth } from '../context/AuthContext';
 import MatchesModal from '../components/MatchesModal';
 import FlagUserModal from '../components/FlagUserModal';
 
+// Helper to resolve image paths and force Cloudinary auto-format (fixes .heic display issues)
+const getImageUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http')) {
+    if (url.includes('res.cloudinary.com') && !url.includes('/f_auto,q_auto/')) {
+      return url.replace('/image/upload/', '/image/upload/f_auto,q_auto/');
+    }
+    return url;
+  }
+  return `http://localhost:5000${url}`;
+};
+
 export default function Profile() {
   const { user, updateUser } = useAuth();
   const location = useLocation();
@@ -360,7 +372,7 @@ export default function Profile() {
                       >
                         {item.imageUrl && (
                           <img
-                            src={item.imageUrl}
+                            src={getImageUrl(item.imageUrl)}
                             alt={item.title}
                             style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '4px', marginBottom: '12px' }}
                           />
@@ -634,7 +646,7 @@ export default function Profile() {
                       >
                         {item.imageUrl && (
                           <img
-                            src={item.imageUrl}
+                            src={getImageUrl(item.imageUrl)}
                             alt={item.title}
                             style={{ width: '100%', height: '160px', objectFit: 'cover', borderRadius: '4px', marginBottom: '12px' }}
                           />

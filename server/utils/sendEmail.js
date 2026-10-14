@@ -8,6 +8,18 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Generic email sender for broadcasts and general notifications
+async function sendEmail({ email, subject, message }) {
+  const mailOptions = {
+    from: `"LoKey Campus" <${process.env.EMAIL_USER}>`,
+    to: email,
+    subject: subject,
+    text: message,
+  };
+
+  return transporter.sendMail(mailOptions);
+}
+
 async function sendResetOtpEmail(toEmail, otp) {
   const mailOptions = {
     from: `"LoKey Campus" <${process.env.EMAIL_USER}>`,
@@ -34,4 +46,4 @@ async function sendResetOtpEmail(toEmail, otp) {
   return transporter.sendMail(mailOptions);
 }
 
-module.exports = { sendResetOtpEmail };
+module.exports = { sendEmail, sendResetOtpEmail };

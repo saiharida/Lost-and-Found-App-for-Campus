@@ -1,6 +1,32 @@
 const User = require('../models/User');
 const Item = require('../models/Item');
-const sendEmail = require('../utils/sendEmail');
+const { sendEmail } = require('../utils/sendEmail');
+const cloudinary = require('cloudinary').v2;
+const streamifier = require('streamifier');
+
+// Configure Cloudinary using your environment variables
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// Helper function to upload image buffer to Cloudinary
+const uploadToCloudinary = (fileBuffer) => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      { folder: 'campus_reports' },
+      (error, result) => {
+        if (result) {
+          resolve(result);
+        } else {
+          reject(error);
+        }
+      }
+    );
+    streamifier.createReadStream(fileBuffer).pipe(uploadStream);
+  });
+};
 
 // Fetch all registered users with strike and suspension filters
 async function getAllUsers(req, res) {
@@ -87,7 +113,7 @@ async function flagUser(req, res) {
   }
 }
 
-// 1. Admin: View all reports/items with detailed user info (date, title, description, location, user mail, name, designation)
+// 1. Admin: View all reports/items with detailed user info
 async function getAllReportsAdmin(req, res) {
   try {
     const items = await Item.find({})
@@ -102,7 +128,7 @@ async function getAllReportsAdmin(req, res) {
   }
 }
 
-// 2. Admin: View flagged reports separately (items with flagCount > 0)
+// 2. Admin: View flagged reports separately
 async function getFlaggedReportsAdmin(req, res) {
   try {
     const flaggedItems = await Item.find({ flagCount: { $gt: 0 } })
@@ -122,14 +148,13 @@ async function getFlaggedReportsAdmin(req, res) {
 async function flagItemReport(req, res) {
   try {
     const { itemId } = req.params;
-    const userId = req.user._id; // from auth middleware
+    const userId = req.user._id;
 
     const item = await Item.findById(itemId);
     if (!item) {
       return res.status(404).json({ message: 'Item report not found.' });
     }
 
-    // Check if user already flagged this item
     const alreadyFlagged = item.flags.some((f) => f.user.toString() === userId.toString());
     if (alreadyFlagged) {
       return res.status(400).json({ message: 'You have already flagged this report.' });
@@ -139,7 +164,6 @@ async function flagItemReport(req, res) {
     item.flagCount = item.flags.length;
     await item.save();
 
-    // If item hits 3 or more flags, automatically issue a strike to the user who posted it
     if (item.flagCount >= 3) {
       const author = await User.findById(item.reportedBy);
       if (author && author.role !== 'admin') {
@@ -159,7 +183,7 @@ async function flagItemReport(req, res) {
   }
 }
 
-// 4. Admin: Remove a flagged report and penalize poster if needed
+// 4. Admin: Remove a flagged report and penalize poster
 async function removeReportAdmin(req, res) {
   try {
     const { itemId } = req.params;
@@ -171,7 +195,6 @@ async function removeReportAdmin(req, res) {
     const authorId = item.reportedBy;
     await Item.findByIdAndDelete(itemId);
 
-    // Increment strike count for the user whose post was removed
     const author = await User.findById(authorId);
     if (author && author.role !== 'admin') {
       author.strikeCount = (author.strikeCount || 0) + 1;
@@ -189,12 +212,28 @@ async function removeReportAdmin(req, res) {
   }
 }
 
-// 5. Admin: See items not handed over for more than 3 days & Broadcast "Alert All" Email
+// 4b. Admin: Delete general report from "All Reports" without penalizing
+async function deleteGeneralReport(req, res) {
+  try {
+    const { itemId } = req.params;
+    const item = await Item.findById(itemId);
+    if (!item) {
+      return res.status(404).json({ message: 'Item not found.' });
+    }
+
+    await Item.findByIdAndDelete(itemId);
+    res.status(200).json({ message: 'Report removed successfully.' });
+  } catch (err) {
+    console.error('deleteGeneralReport error:', err);
+    res.status(500).json({ message: 'Failed to remove report.', error: err.message });
+  }
+}
+
+// 5. Admin: See overdue items & Broadcast "Alert All" Email
 async function getOverdueItems(req, res) {
   try {
     const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     
-    // Find found items that are still active/unclaimed after 3 days
     const overdueItems = await Item.find({
       type: 'found',
       status: 'active',
@@ -217,15 +256,12 @@ async function alertAllUsers(req, res) {
       return res.status(400).json({ message: 'Subject and message are required.' });
     }
 
-    // Fetch all active, non-suspended users' emails
-    const users = await User.find({ isSuspended: false }).select('email').lean();
-    const emails = users.map((u) => u.email).filter(Boolean);
+    const emails = ['lokey-testing@mgits.ac.in']; 
 
     if (emails.length === 0) {
       return res.status(400).json({ message: 'No recipient emails found.' });
     }
 
-    // Send email using your sendEmail utility (bcc or loop)
     for (const email of emails) {
       await sendEmail({
         email,
@@ -234,20 +270,27 @@ async function alertAllUsers(req, res) {
       });
     }
 
-    res.status(200).json({ message: `Alert broadcasted successfully to ${emails.length} users.` });
+    res.status(200).json({ message: `Alert broadcasted successfully to your test group!` });
   } catch (err) {
     console.error('alertAllUsers error:', err);
     res.status(500).json({ message: 'Failed to broadcast alert email.', error: err.message });
   }
 }
 
-// 6. Admin: Post a lost/found report directly (e.g., items handed over to library/admin staff)
+// 6. Admin: Post a lost/found report directly with Cloudinary upload support
 async function adminCreateReport(req, res) {
   try {
-    const { type, title, description, category, location, dateOccurred, contactInfo, imageUrl } = req.body;
+    const { type, title, description, category, location, dateOccurred, contactInfo } = req.body;
     
+    let imageUrl = req.body.imageUrl || '';
+
+    if (req.file) {
+      const cloudinaryResult = await uploadToCloudinary(req.file.buffer);
+      imageUrl = cloudinaryResult.secure_url;
+    }
+
     const newItem = await Item.create({
-      type,
+      type: type || 'found',
       title,
       description,
       category,
@@ -255,7 +298,7 @@ async function adminCreateReport(req, res) {
       dateOccurred: dateOccurred || Date.now(),
       contactInfo,
       imageUrl,
-      reportedBy: req.user._id, // Admin's user ID
+      reportedBy: req.user._id,
       status: 'active',
     });
 
@@ -273,6 +316,7 @@ module.exports = {
   getFlaggedReportsAdmin,
   flagItemReport,
   removeReportAdmin,
+  deleteGeneralReport,
   getOverdueItems,
   alertAllUsers,
   adminCreateReport,
